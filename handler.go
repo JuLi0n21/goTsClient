@@ -10,7 +10,7 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-func wsHandler(api any) func(*websocket.Conn) {
+func WsHandler(api any) func(*websocket.Conn) {
 	return func(ws *websocket.Conn) {
 		apiVal := reflect.ValueOf(api)
 
