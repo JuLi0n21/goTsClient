@@ -1,4 +1,4 @@
-module RpcTsClient
+module github.com/juli0n21/goTsClient
 
 go 1.26.1
 
