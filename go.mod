@@ -1,4 +1,4 @@
-module clientGen
+module RpcTsClient
 
 go 1.26.1
 

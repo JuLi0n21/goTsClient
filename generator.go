@@ -1,4 +1,4 @@
-package gotsclient
+package rpc
 
 import (
 	_ "embed"

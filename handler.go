@@ -1,4 +1,4 @@
-package gotsclient
+package rpc
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-func WsHandler(api any) func(*websocket.Conn) {
+func WsHandler(apiStruct any, isTokenValid func(token string, method string, params []any) bool) func(*websocket.Conn) {
 	return func(ws *websocket.Conn) {
-		apiVal := reflect.ValueOf(api)
+		apiVal := reflect.ValueOf(apiStruct)
 
 		for {
 			var msg []byte
@@ -34,7 +34,13 @@ func WsHandler(api any) func(*websocket.Conn) {
 				continue
 			}
 
-			log.Printf("%s, %v", req.Method, req.Params)
+			if !isTokenValid(req.Token, req.Method, req.Params) {
+				_ = websocket.JSON.Send(ws, map[string]any{
+					"id":    req.ID,
+					"error": "token not valid",
+				})
+				return
+			}
 
 			method := apiVal.MethodByName(req.Method)
 			if !method.IsValid() {
