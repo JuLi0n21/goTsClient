@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"reflect"
 	"slices"
@@ -25,7 +24,6 @@ func GenClient(api any, outPutPath string) error {
 	if err := os.WriteFile(outPutPath, []byte(ts), 0644); err != nil {
 		return err
 	}
-	log.Println("Generated TS client", outPutPath)
 	return nil
 }
 
@@ -46,7 +44,6 @@ func GenerateTS(apiType reflect.Type, clientName string) (string, error) {
 			if i == 0 {
 				continue
 			}
-			log.Println(param)
 			collectStructs(param, structs)
 		}
 
