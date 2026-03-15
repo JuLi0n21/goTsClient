@@ -49,10 +49,28 @@ func GenerateTS(apiType reflect.Type, clientName string) (string, error) {
 
 		outParams := method.Type.NumOut()
 
+		unsupportedMethod := "not supported, allowed layout are \nfunc() (error) \nfunc() (struct, error), \nfunc(x...) (struct, error)"
+		//func()
+		if outParams == 0 {
+			return "", errors.New(method.Name + unsupportedMethod)
+		}
+
+		//func() (err)
+		if outParams == 1 {
+			if method.Type.Out(0).Implements(errorType) {
+				collectStructs(method.Type.Out(0), structs)
+			} else {
+				return "", errors.New(method.Name + unsupportedMethod)
+			}
+		}
+
+		//func() (struct, err)
 		if outParams > 1 && method.Type.Out(1).Implements(errorType) {
 			collectStructs(method.Type.Out(0), structs)
-		} else {
-			return "", errors.New("supported layout are func() (Struct, error), func(x...) (*Struct, error) ")
+		}
+
+		if outParams > 2 {
+			return "", errors.New(method.Name + unsupportedMethod)
 		}
 
 	}
@@ -94,46 +112,39 @@ func GenerateTS(apiType reflect.Type, clientName string) (string, error) {
 	b.WriteString(fmt.Sprintf("export interface %s {\n", clientName))
 	for m := range apiType.Methods() {
 		params := []string{}
-		i := -1
-		for ptypeGo := range m.Type.Ins() {
-			i++
-			//skip self or context
-			if ptypeGo.String() == "context.Context" || i == 0 {
+
+		tsParamIdx := 0
+		for i := 0; i < m.Type.NumIn(); i++ {
+			ptypeGo := m.Type.In(i)
+
+			if i == 0 {
+				continue
+			}
+			if ptypeGo.Implements(reflect.TypeOf((*interface{ Done() <-chan struct{} })(nil)).Elem()) ||
+				strings.Contains(ptypeGo.String(), "context.Context") {
 				continue
 			}
 
 			var pname string
-			if ptypeGo.Kind() == reflect.Struct {
-				named := false
-				for fields := range ptypeGo.Fields() {
-					tag := fields.Tag.Get("json")
-					if tag != "" && tag != "-" {
-						pname = tag
-						named = true
-						break
-					}
-				}
-				if !named {
-					// fallback to camelCase struct name
-					if ptypeGo.Name() != "" {
-						pname = strings.ToLower(ptypeGo.Name()[:1]) + ptypeGo.Name()[1:]
-					} else {
-						pname = fmt.Sprintf("arg%d", i-1)
-					}
-				}
+			if ptypeGo.Kind() == reflect.Struct && ptypeGo.Name() != "" {
+				pname = strings.ToLower(ptypeGo.Name()[:1]) + ptypeGo.Name()[1:]
 			} else {
-				pname = fmt.Sprintf("arg%d", i-1)
+				pname = fmt.Sprintf("arg%d", tsParamIdx)
 			}
 
 			ptype := goTypeToTS(ptypeGo)
-
 			params = append(params, fmt.Sprintf("%s: %s", pname, ptype))
+			tsParamIdx++
 		}
 
 		resType := "any"
 		if m.Type.NumOut() > 0 {
 			resType = goTypeToTS(m.Type.Out(0))
+			if m.Type.Out(0).Implements(errorType) {
+				resType = "any" // It's just a func() error
+			}
 		}
+
 		b.WriteString(fmt.Sprintf("  %s(%s): Promise<RPCResult<%s>>;\n", m.Name, strings.Join(params, ", "), resType))
 	}
 	b.WriteString("}\n\n")
