@@ -90,9 +90,11 @@ export class WSBackend {
 
 			Object.keys(this.callbacks).forEach(id => {
 				const callbackData = this.callbacks[id];
+				if (callbackData) {
 				clearTimeout(callbackData.timeout);
 				callbackData.callback({ message: 'WebSocket disconnected' }, null);
 				delete this.callbacks[id];
+				}
 			});
 
 			if (wasConnected) {
