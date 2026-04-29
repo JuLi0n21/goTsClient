@@ -6,6 +6,7 @@ export class WSBackend {
 		callback: (err: any, res: any) => void;
 		timeout: ReturnType<typeof setTimeout>;
 	}> = {};
+	private broadcastListeners: Map<string, Set<(data: any) => void>> = new Map();
 	private counter = 0;
 	private _api: any = null;
 	private queue: Array<{ id: string; method: string; params: any[]; resolve: Function; reject: Function }> = [];
@@ -13,7 +14,7 @@ export class WSBackend {
 	private _connected = false;
 	private connectedListeners: Array<() => void> = [];
 	private disconnectedListeners: Array<() => void> = [];
-	private callTimeout = 10000; // 10 second timeout for calls
+	private callTimeout = 10000;
 
 	constructor(url: string) {
 		this.url = url;
@@ -47,6 +48,20 @@ export class WSBackend {
 		this.callTimeout = ms;
 	}
 
+	public subscribe<K extends keyof BroadcastEvents>(topic: K, callback: (data: BroadcastEvents[K]) => void): () => void {
+		const topicStr = String(topic);
+		if (!this.broadcastListeners.has(topicStr)) {
+			this.broadcastListeners.set(topicStr, new Set());
+		}
+
+		const cb = callback as (data: any) => void;
+		this.broadcastListeners.get(topicStr)!.add(cb);
+
+		return () => {
+			this.broadcastListeners.get(topicStr)?.delete(cb);
+		};
+	}
+
 	private connect() {
 		this.ws = new WebSocket(this.url);
 
@@ -66,6 +81,14 @@ export class WSBackend {
 			try {
 				msg = JSON.parse(evt.data);
 			} catch {
+				return;
+			}
+
+			if (msg.topic) {
+				const listeners = this.broadcastListeners.get(msg.topic);
+				if (listeners) {
+					listeners.forEach(cb => cb(msg.data));
+				}
 				return;
 			}
 
@@ -91,9 +114,9 @@ export class WSBackend {
 			Object.keys(this.callbacks).forEach(id => {
 				const callbackData = this.callbacks[id];
 				if (callbackData) {
-				clearTimeout(callbackData.timeout);
-				callbackData.callback({ message: 'WebSocket disconnected' }, null);
-				delete this.callbacks[id];
+					clearTimeout(callbackData.timeout);
+					callbackData.callback({ message: 'WebSocket disconnected' }, null);
+					delete this.callbacks[id];
 				}
 			});
 
@@ -117,7 +140,7 @@ export class WSBackend {
 		return new Promise((resolve) => {
 			const timeout = setTimeout(() => {
 				if (this.callbacks[id]) {
-					console.warn(`[WS] Call timeout for \${method} (id: \${id})`);
+					console.warn(`[WS] Call timeout for ${method} (id: ${id})`);
 					this.callbacks[id].callback({ message: 'Request timeout' }, null);
 					delete this.callbacks[id];
 				}
