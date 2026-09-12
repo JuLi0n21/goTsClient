@@ -1,10 +1,97 @@
+class StreamingJSONDecoder {
+	private buffer = "";
+
+	public push(chunk: string): any[] {
+		this.buffer += chunk;
+		const results: any[] = [];
+
+		while (this.buffer.length > 0) {
+			this.buffer = this.buffer.trimStart();
+			if (!this.buffer) break;
+
+			const parsed = this.tryParseNext();
+			if (parsed === undefined) {
+				break;
+			}
+			results.push(parsed);
+		}
+
+		return results;
+	}
+
+	private tryParseNext(): any {
+		let depth = 0;
+		let inString = false;
+		let escape = false;
+
+		const firstChar = this.buffer[0];
+		if (firstChar !== '{' && firstChar !== '[') {
+			const newlineIdx = this.buffer.indexOf('\n');
+			if (newlineIdx !== -1) {
+				const line = this.buffer.slice(0, newlineIdx).trim();
+				this.buffer = this.buffer.slice(newlineIdx + 1);
+				if (!line) return undefined;
+				try {
+					return JSON.parse(line);
+				} catch {
+					return undefined;
+				}
+			}
+			return undefined;
+		}
+
+		for (let i = 0; i < this.buffer.length; i++) {
+			const ch = this.buffer[i];
+			if (escape) {
+				escape = false;
+				continue;
+			}
+			if (ch === '\\' && inString) {
+				escape = true;
+				continue;
+			}
+			if (ch === '"') {
+				inString = !inString;
+				continue;
+			}
+			if (!inString) {
+				if (ch === '{' || ch === '[') {
+					depth++;
+				} else if (ch === '}' || ch === ']') {
+					depth--;
+					if (depth === 0) {
+						const jsonStr = this.buffer.slice(0, i + 1);
+						try {
+							const val = JSON.parse(jsonStr);
+							this.buffer = this.buffer.slice(i + 1);
+							return val;
+						} catch {
+						}
+					}
+				}
+			}
+		}
+
+		return undefined;
+	}
+
+	public reset() {
+		this.buffer = "";
+	}
+}
+
 export class WSBackend {
 	private ws: WebSocket | null = null;
 	private tokenProvider?: () => string;
 	private url: string;
+	private decoder = new StreamingJSONDecoder();
 	private callbacks: Record<string, {
 		callback: (err: any, res: any) => void;
 		timeout: ReturnType<typeof setTimeout>;
+	}> = {};
+	private streamCallbacks: Record<string, {
+		onData: (data: any) => void;
+		onDone: (err?: any) => void;
 	}> = {};
 	private broadcastListeners: Map<string, Set<(data: any) => void>> = new Map();
 	private counter = 0;
@@ -62,6 +149,18 @@ export class WSBackend {
 		};
 	}
 
+	public stream<T = any>(method: string, params: any[] = []): AsyncIterable<T> & { cancel: () => void } {
+		const callResult = this.call(method, params);
+		return {
+			cancel: () => {
+				callResult[Symbol.asyncIterator]().return?.();
+			},
+			[Symbol.asyncIterator]() {
+				return callResult[Symbol.asyncIterator]();
+			}
+		};
+	}
+
 	private connect() {
 		this.ws = new WebSocket(this.url);
 
@@ -77,39 +176,19 @@ export class WSBackend {
 		};
 
 		this.ws.onmessage = (evt) => {
-			let msg: any;
-			try {
-				msg = JSON.parse(evt.data);
-			} catch {
-				return;
+			const raw = typeof evt.data === "string" ? evt.data : "";
+			if (!raw) return;
+
+			const msgs = this.decoder.push(raw);
+			for (const msg of msgs) {
+				this.handleMessage(msg);
 			}
-
-			if (msg.topic) {
-				const listeners = this.broadcastListeners.get(msg.topic);
-				if (listeners) {
-					listeners.forEach(cb => cb(msg.data));
-				}
-				return;
-			}
-
-			const callbackData = this.callbacks[msg.id];
-			if (!callbackData) return;
-
-			clearTimeout(callbackData.timeout);
-
-			if (msg.result && typeof msg.result === "object" && ("data" in msg.result || "error" in msg.result)) {
-				const r = msg.result;
-				callbackData.callback(r.error, r.data);
-			} else {
-				callbackData.callback(msg.error, msg.result);
-			}
-
-			delete this.callbacks[msg.id];
 		};
 
 		this.ws.onclose = () => {
 			const wasConnected = this._connected;
 			this._connected = false;
+			this.decoder.reset();
 
 			Object.keys(this.callbacks).forEach(id => {
 				const callbackData = this.callbacks[id];
@@ -117,6 +196,14 @@ export class WSBackend {
 					clearTimeout(callbackData.timeout);
 					callbackData.callback({ message: 'WebSocket disconnected' }, null);
 					delete this.callbacks[id];
+				}
+			});
+
+			Object.keys(this.streamCallbacks).forEach(id => {
+				const streamData = this.streamCallbacks[id];
+				if (streamData) {
+					streamData.onDone({ message: 'WebSocket disconnected' });
+					delete this.streamCallbacks[id];
 				}
 			});
 
@@ -134,10 +221,93 @@ export class WSBackend {
 		};
 	}
 
-	private call(method: string, params: any[]): Promise<any> {
+	private handleMessage(msg: any) {
+		if (msg.topic) {
+			const listeners = this.broadcastListeners.get(msg.topic);
+			if (listeners) {
+				listeners.forEach(cb => cb(msg.data));
+			}
+			return;
+		}
+
+		if (msg.stream) {
+			const streamData = this.streamCallbacks[msg.id];
+			if (!streamData) return;
+
+			if (msg.done) {
+				const err = (msg.result && typeof msg.result === "object") ? msg.result.error : msg.error;
+				streamData.onDone(err);
+				delete this.streamCallbacks[msg.id];
+			} else {
+				const data = (msg.result && typeof msg.result === "object" && "data" in msg.result)
+					? msg.result.data
+					: msg.result;
+				streamData.onData(data);
+			}
+			return;
+		}
+
+		const callbackData = this.callbacks[msg.id];
+		if (!callbackData) return;
+
+		clearTimeout(callbackData.timeout);
+
+		if (msg.result && typeof msg.result === "object" && ("data" in msg.result || "error" in msg.result)) {
+			const r = msg.result;
+			callbackData.callback(r.error, r.data);
+		} else {
+			callbackData.callback(msg.error, msg.result);
+		}
+
+		delete this.callbacks[msg.id];
+	}
+
+	private call(method: string, params: any[]): Promise<any> & AsyncIterable<any> {
 		const id = (++this.counter).toString();
 
-		return new Promise((resolve) => {
+		const streamQueue: Array<{ value?: any; done: boolean; error?: any }> = [];
+		let resolveWaiting: ((val: IteratorResult<any>) => void) | null = null;
+		let rejectWaiting: ((err: any) => void) | null = null;
+		let isStreamDone = false;
+
+		this.streamCallbacks[id] = {
+			onData: (data: any) => {
+				if (isStreamDone) return;
+				if (resolveWaiting) {
+					const r = resolveWaiting;
+					resolveWaiting = null;
+					rejectWaiting = null;
+					r({ value: data, done: false });
+				} else {
+					streamQueue.push({ value: data, done: false });
+				}
+			},
+			onDone: (err?: any) => {
+				if (isStreamDone) return;
+				isStreamDone = true;
+				if (err) {
+					if (rejectWaiting) {
+						const r = rejectWaiting;
+						resolveWaiting = null;
+						rejectWaiting = null;
+						r(err);
+					} else {
+						streamQueue.push({ done: true, error: err });
+					}
+				} else {
+					if (resolveWaiting) {
+						const r = resolveWaiting;
+						resolveWaiting = null;
+						rejectWaiting = null;
+						r({ value: undefined, done: true });
+					} else {
+						streamQueue.push({ done: true });
+					}
+				}
+			}
+		};
+
+		const promise = new Promise((resolve) => {
 			const timeout = setTimeout(() => {
 				if (this.callbacks[id]) {
 					console.warn(`[WS] Call timeout for ${method} (id: ${id})`);
@@ -160,6 +330,37 @@ export class WSBackend {
 				this.queue.push({ id, method, params, resolve, reject: () => { } });
 			}
 		});
+
+		const result: any = promise;
+		result[Symbol.asyncIterator] = () => {
+			return {
+				next(): Promise<IteratorResult<any>> {
+					if (streamQueue.length > 0) {
+						const item = streamQueue.shift()!;
+						if (item.error) {
+							return Promise.reject(item.error);
+						}
+						return Promise.resolve({ value: item.value, done: item.done });
+					}
+					if (isStreamDone) {
+						return Promise.resolve({ value: undefined, done: true });
+					}
+					return new Promise<IteratorResult<any>>((res, rej) => {
+						resolveWaiting = res;
+						rejectWaiting = rej;
+					});
+				},
+				return(): Promise<IteratorResult<any>> {
+					isStreamDone = true;
+					if (this._connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+						this.ws.send(JSON.stringify({ id, cancel: true }));
+					}
+					return Promise.resolve({ value: undefined, done: true });
+				}
+			};
+		};
+
+		return result;
 	}
 
 	private _send(id: string, method: string, params: any[]) {

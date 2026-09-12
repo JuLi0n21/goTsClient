@@ -186,3 +186,36 @@ func TestGenClient_WithBroadcasts(t *testing.T) {
 		t.Error("GenClient did not create the file")
 	}
 }
+
+func TestGenClientType_Generics(t *testing.T) {
+	tmpFile := "test_client_generic.ts"
+	defer os.Remove(tmpFile)
+
+	err := GenClientType[MockAPI, MockBroadcasts](tmpFile)
+	if err != nil {
+		t.Fatalf("GenClientType failed: %v", err)
+	}
+
+	content, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+
+	s := string(content)
+	if !strings.Contains(s, "export interface TestClient") && !strings.Contains(s, "export interface RPCClient") {
+		t.Error("Expected RPCClient interface in generated output")
+	}
+	if !strings.Contains(s, "'user_updated': User;") {
+		t.Error("Expected user_updated broadcast event in generated output")
+	}
+}
+
+func TestGenerateTSType_GenericsWithoutBroadcasts(t *testing.T) {
+	ts, err := GenerateTSType[MockAPI, any]("MyCustomClient")
+	if err != nil {
+		t.Fatalf("GenerateTSType failed: %v", err)
+	}
+	if !strings.Contains(ts, "export interface MyCustomClient") {
+		t.Error("Expected MyCustomClient interface in generated output")
+	}
+}

@@ -15,16 +15,50 @@ var backendClient string
 
 var errorType = reflect.TypeOf((*error)(nil)).Elem()
 
-func GenClient(api any, broadcasts any, outPutPath string) error {
+func typeOf[T any]() reflect.Type {
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	if t.Kind() != reflect.Ptr && t.Kind() != reflect.Interface {
+		t = reflect.PointerTo(t)
+	}
+	return t
+}
 
-	ts, err := GenerateTS(reflect.TypeOf(api), reflect.TypeOf(broadcasts), "RPCClient")
+func broadcastTypeOf[T any]() reflect.Type {
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	if t.Kind() == reflect.Interface {
+		return nil
+	}
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() == reflect.Struct && t.NumField() == 0 {
+		return nil
+	}
+	return t
+}
+
+func GenClientType[API any, Broadcasts any](outPutPath string) error {
+	ts, err := GenerateTSType[API, Broadcasts]("RPCClient")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(outPutPath, []byte(ts), 0644); err != nil {
+	return os.WriteFile(outPutPath, []byte(ts), 0644)
+}
+
+func GenerateTSType[API any, Broadcasts any](clientName string) (string, error) {
+	return GenerateTS(typeOf[API](), broadcastTypeOf[Broadcasts](), clientName)
+}
+
+func GenClient(api any, broadcasts any, outPutPath string) error {
+	var bt reflect.Type
+	if broadcasts != nil {
+		bt = reflect.TypeOf(broadcasts)
+	}
+	ts, err := GenerateTS(reflect.TypeOf(api), bt, "RPCClient")
+	if err != nil {
 		return err
 	}
-	return nil
+	return os.WriteFile(outPutPath, []byte(ts), 0644)
 }
 
 func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName string) (string, error) {
@@ -40,8 +74,7 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 		}
 
 		if bt.Kind() == reflect.Struct {
-			for i := 0; i < bt.NumField(); i++ {
-				f := bt.Field(i)
+			for f := range bt.Fields() {
 				topicName := f.Name
 				tag := f.Tag.Get("json")
 				if tag != "" {
@@ -73,13 +106,13 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 			return "", errors.New(method.Name + unsupportedMethod)
 		}
 		if outParams == 1 {
-			if method.Type.Out(0).Implements(errorType) {
+			if method.Type.Out(0).Implements(errorType) || method.Type.Out(0).Kind() == reflect.Chan {
 				collectStructs(method.Type.Out(0), structs)
 			} else {
 				return "", errors.New(method.Name + unsupportedMethod)
 			}
 		}
-		if outParams > 1 && method.Type.Out(1).Implements(errorType) {
+		if outParams > 1 && (method.Type.Out(1).Implements(errorType) || method.Type.Out(0).Kind() == reflect.Chan) {
 			collectStructs(method.Type.Out(0), structs)
 		}
 		if outParams > 2 {
@@ -124,10 +157,10 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 		params := []string{}
 
 		tsParamIdx := 0
-		for i := 0; i < m.Type.NumIn(); i++ {
-			ptypeGo := m.Type.In(i)
-
-			if i == 0 {
+		idx := -1
+		for ptypeGo := range m.Type.Ins() {
+			idx++
+			if idx == 0 {
 				continue
 			}
 			if ptypeGo.Implements(reflect.TypeOf((*interface{ Done() <-chan struct{} })(nil)).Elem()) ||
@@ -145,6 +178,12 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 			ptype := goTypeToTS(ptypeGo)
 			params = append(params, fmt.Sprintf("%s: %s", pname, ptype))
 			tsParamIdx++
+		}
+
+		if m.Type.NumOut() > 0 && m.Type.Out(0).Kind() == reflect.Chan {
+			resType := goTypeToTS(m.Type.Out(0).Elem())
+			b.WriteString(fmt.Sprintf("  %s(%s): Promise<RPCResult<%s>> & AsyncIterable<%s>;\n", m.Name, strings.Join(params, ", "), resType, resType))
+			continue
 		}
 
 		resType := "any"
@@ -178,6 +217,7 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 
 	return b.String(), nil
 }
+
 func collectStructs(t reflect.Type, m map[string]reflect.Type) {
 	if t == nil {
 		return
@@ -189,7 +229,6 @@ func collectStructs(t reflect.Type, m map[string]reflect.Type) {
 	case reflect.Struct:
 		name := t.Name()
 		if name == "" {
-			// anonymous struct: skip named interface generation; will fallback to 'any' or inline handling
 			return
 		}
 		if _, ok := m[name]; ok {
@@ -202,6 +241,8 @@ func collectStructs(t reflect.Type, m map[string]reflect.Type) {
 		}
 
 	case reflect.Slice, reflect.Array:
+		collectStructs(t.Elem(), m)
+	case reflect.Chan:
 		collectStructs(t.Elem(), m)
 	case reflect.Map:
 		collectStructs(t.Elem(), m)
@@ -216,6 +257,8 @@ func goTypeToTS(t reflect.Type) string {
 		return goTypeToTS(t.Elem())
 	}
 	switch t.Kind() {
+	case reflect.Chan:
+		return goTypeToTS(t.Elem())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Float32, reflect.Float64:
 		return "number"
