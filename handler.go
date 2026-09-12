@@ -90,6 +90,7 @@ type Handler struct {
 	isTokenValid         func(token string, method string, params []any) bool
 	compressionEnabled   bool
 	compressionThreshold int
+	readLimit            int64
 	routesMu             sync.RWMutex
 	routes               map[string]RouteInvoker
 	streamRoutesMu       sync.RWMutex
@@ -102,10 +103,16 @@ func NewHandler() *Handler {
 	return &Handler{
 		compressionEnabled:   true,
 		compressionThreshold: 512,
+		readLimit:            32 * 1024 * 1024,
 		routes:               make(map[string]RouteInvoker),
 		streamRoutes:         make(map[string]StreamInvoker),
 		conns:                make(map[*wsConn]struct{}),
 	}
+}
+
+func (h *Handler) SetReadLimit(limit int64) *Handler {
+	h.readLimit = limit
+	return h
 }
 
 func (h *Handler) SetCompression(enabled bool, threshold int) *Handler {
@@ -245,6 +252,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(coderWS.StatusNormalClosure, "")
+
+	if h.readLimit != 0 {
+		conn.SetReadLimit(h.readLimit)
+	}
 
 	cConn := &wsConn{conn: conn}
 	h.addConn(cConn)

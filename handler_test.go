@@ -447,3 +447,56 @@ func TestHandler_Compression(t *testing.T) {
 		t.Errorf("large text corrupted during compressed roundtrip")
 	}
 }
+
+func TestHandler_LargePayload(t *testing.T) {
+	h := NewHandler()
+
+	type LargeReq struct {
+		ImageBase64 string `json:"image_base64"`
+	}
+
+	h.Register("upload", func(ctx context.Context, req LargeReq) (int, error) {
+		return len(req.ImageBase64), nil
+	})
+
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	conn, _, err := coderWS.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("coderWS.Dial failed: %v", err)
+	}
+	defer conn.Close(coderWS.StatusNormalClosure, "")
+
+	hugeString := strings.Repeat("A", 100*1024)
+	sendReq := map[string]any{
+		"id":     "upload-1",
+		"method": "upload",
+		"params": []any{
+			LargeReq{ImageBase64: hugeString},
+		},
+	}
+	if err := coderWSJson.Write(ctx, conn, sendReq); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	var resp struct {
+		ID     string `json:"id"`
+		Result struct {
+			Data  int `json:"data"`
+			Error any `json:"error"`
+		} `json:"result"`
+	}
+	if err := coderWSJson.Read(ctx, conn, &resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if resp.Result.Data != len(hugeString) {
+		t.Errorf("expected length %d, got %d", len(hugeString), resp.Result.Data)
+	}
+}
+
