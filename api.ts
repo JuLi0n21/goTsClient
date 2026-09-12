@@ -1,90 +1,7 @@
-class StreamingJSONDecoder {
-	private buffer = "";
-
-	public push(chunk: string): any[] {
-		this.buffer += chunk;
-		const results: any[] = [];
-
-		while (this.buffer.length > 0) {
-			this.buffer = this.buffer.trimStart();
-			if (!this.buffer) break;
-
-			const parsed = this.tryParseNext();
-			if (parsed === undefined) {
-				break;
-			}
-			results.push(parsed);
-		}
-
-		return results;
-	}
-
-	private tryParseNext(): any {
-		let depth = 0;
-		let inString = false;
-		let escape = false;
-
-		const firstChar = this.buffer[0];
-		if (firstChar !== '{' && firstChar !== '[') {
-			const newlineIdx = this.buffer.indexOf('\n');
-			if (newlineIdx !== -1) {
-				const line = this.buffer.slice(0, newlineIdx).trim();
-				this.buffer = this.buffer.slice(newlineIdx + 1);
-				if (!line) return undefined;
-				try {
-					return JSON.parse(line);
-				} catch {
-					return undefined;
-				}
-			}
-			return undefined;
-		}
-
-		for (let i = 0; i < this.buffer.length; i++) {
-			const ch = this.buffer[i];
-			if (escape) {
-				escape = false;
-				continue;
-			}
-			if (ch === '\\' && inString) {
-				escape = true;
-				continue;
-			}
-			if (ch === '"') {
-				inString = !inString;
-				continue;
-			}
-			if (!inString) {
-				if (ch === '{' || ch === '[') {
-					depth++;
-				} else if (ch === '}' || ch === ']') {
-					depth--;
-					if (depth === 0) {
-						const jsonStr = this.buffer.slice(0, i + 1);
-						try {
-							const val = JSON.parse(jsonStr);
-							this.buffer = this.buffer.slice(i + 1);
-							return val;
-						} catch {
-						}
-					}
-				}
-			}
-		}
-
-		return undefined;
-	}
-
-	public reset() {
-		this.buffer = "";
-	}
-}
-
 export class WSBackend {
 	private ws: WebSocket | null = null;
 	private tokenProvider?: () => string | Promise<string>;
 	private url: string;
-	private decoder = new StreamingJSONDecoder();
 	private callbacks: Record<string, {
 		callback: (err: any, res: any) => void;
 		timeout: ReturnType<typeof setTimeout>;
@@ -178,17 +95,17 @@ export class WSBackend {
 		this.ws.onmessage = (evt) => {
 			const raw = typeof evt.data === "string" ? evt.data : "";
 			if (!raw) return;
-
-			const msgs = this.decoder.push(raw);
-			for (const msg of msgs) {
+			try {
+				const msg = JSON.parse(raw);
 				this.handleMessage(msg);
+			} catch (e) {
+				console.warn("[WS] Failed to parse message:", e);
 			}
 		};
 
 		this.ws.onclose = () => {
 			const wasConnected = this._connected;
 			this._connected = false;
-			this.decoder.reset();
 
 			Object.keys(this.callbacks).forEach(id => {
 				const callbackData = this.callbacks[id];
@@ -231,6 +148,10 @@ export class WSBackend {
 		}
 
 		if (msg.stream) {
+			if (this.callbacks[msg.id]) {
+				clearTimeout(this.callbacks[msg.id].timeout);
+				delete this.callbacks[msg.id];
+			}
 			const streamData = this.streamCallbacks[msg.id];
 			if (!streamData) return;
 
@@ -260,6 +181,7 @@ export class WSBackend {
 		}
 
 		delete this.callbacks[msg.id];
+		delete this.streamCallbacks[msg.id];
 	}
 
 	private call(method: string, params: any[]): Promise<any> & AsyncIterable<any> {
@@ -313,6 +235,7 @@ export class WSBackend {
 					console.warn(`[WS] Call timeout for ${method} (id: ${id})`);
 					this.callbacks[id].callback({ message: 'Request timeout' }, null);
 					delete this.callbacks[id];
+					delete this.streamCallbacks[id];
 				}
 			}, this.callTimeout);
 
@@ -352,6 +275,11 @@ export class WSBackend {
 				},
 				return(): Promise<IteratorResult<any>> {
 					isStreamDone = true;
+					if (this.callbacks[id]) {
+						clearTimeout(this.callbacks[id].timeout);
+						delete this.callbacks[id];
+					}
+					delete this.streamCallbacks[id];
 					if (this._connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
 						this.ws.send(JSON.stringify({ id, cancel: true }));
 					}

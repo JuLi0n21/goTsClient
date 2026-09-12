@@ -10,7 +10,6 @@ import (
 
 	coderWS "github.com/coder/websocket"
 	coderWSJson "github.com/coder/websocket/wsjson"
-	"golang.org/x/net/websocket"
 )
 
 type TestReq struct {
@@ -31,7 +30,6 @@ type TestAlert struct {
 func TestHandler_GenericRegister(t *testing.T) {
 	h := NewHandler()
 
-	// Register with Go 1.27 generic method
 	h.Register("greet", func(ctx context.Context, req TestReq) (TestResp, error) {
 		return TestResp{
 			Greeting: "Hello " + req.Name,
@@ -39,22 +37,23 @@ func TestHandler_GenericRegister(t *testing.T) {
 		}, nil
 	})
 
-	// Register parameterless method with Go 1.27 generic method
 	h.RegisterNoArg("status", func(ctx context.Context) (string, error) {
 		return "ok", nil
 	})
 
-	server := httptest.NewServer(websocket.Handler(h.WsHandler()))
+	server := httptest.NewServer(h)
 	defer server.Close()
 
-	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	ws, err := websocket.Dial(wsURL, "", server.URL)
-	if err != nil {
-		t.Fatalf("websocket.Dial failed: %v", err)
-	}
-	defer ws.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// Test greet
+	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	ws, _, err := coderWS.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("coderWS.Dial failed: %v", err)
+	}
+	defer ws.Close(coderWS.StatusNormalClosure, "")
+
 	reqMsg := map[string]any{
 		"id":     "1",
 		"method": "greet",
@@ -62,8 +61,8 @@ func TestHandler_GenericRegister(t *testing.T) {
 			map[string]any{"name": "Alice", "age": 25},
 		},
 	}
-	if err := websocket.JSON.Send(ws, reqMsg); err != nil {
-		t.Fatalf("Send failed: %v", err)
+	if err := coderWSJson.Write(ctx, ws, reqMsg); err != nil {
+		t.Fatalf("Write failed: %v", err)
 	}
 
 	var resp struct {
@@ -73,8 +72,8 @@ func TestHandler_GenericRegister(t *testing.T) {
 			Error any      `json:"error"`
 		} `json:"result"`
 	}
-	if err := websocket.JSON.Receive(ws, &resp); err != nil {
-		t.Fatalf("Receive failed: %v", err)
+	if err := coderWSJson.Read(ctx, ws, &resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
 	}
 
 	if resp.ID != "1" {
@@ -84,14 +83,13 @@ func TestHandler_GenericRegister(t *testing.T) {
 		t.Errorf("unexpected result: %+v", resp.Result.Data)
 	}
 
-	// Test status
 	reqMsg2 := map[string]any{
 		"id":     "2",
 		"method": "status",
 		"params": []any{},
 	}
-	if err := websocket.JSON.Send(ws, reqMsg2); err != nil {
-		t.Fatalf("Send failed: %v", err)
+	if err := coderWSJson.Write(ctx, ws, reqMsg2); err != nil {
+		t.Fatalf("Write failed: %v", err)
 	}
 
 	var resp2 struct {
@@ -101,8 +99,8 @@ func TestHandler_GenericRegister(t *testing.T) {
 			Error any    `json:"error"`
 		} `json:"result"`
 	}
-	if err := websocket.JSON.Receive(ws, &resp2); err != nil {
-		t.Fatalf("Receive failed: %v", err)
+	if err := coderWSJson.Read(ctx, ws, &resp2); err != nil {
+		t.Fatalf("Read failed: %v", err)
 	}
 
 	if resp2.Result.Data != "ok" {
@@ -113,17 +111,19 @@ func TestHandler_GenericRegister(t *testing.T) {
 func TestHandler_GenericBroadcast(t *testing.T) {
 	h := NewHandler()
 
-	server := httptest.NewServer(websocket.Handler(h.WsHandler()))
+	server := httptest.NewServer(h)
 	defer server.Close()
 
-	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	ws, err := websocket.Dial(wsURL, "", server.URL)
-	if err != nil {
-		t.Fatalf("websocket.Dial failed: %v", err)
-	}
-	defer ws.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// Wait briefly for connection to be registered
+	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	ws, _, err := coderWS.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("coderWS.Dial failed: %v", err)
+	}
+	defer ws.Close(coderWS.StatusNormalClosure, "")
+
 	time.Sleep(50 * time.Millisecond)
 
 	var wg sync.WaitGroup
@@ -136,10 +136,9 @@ func TestHandler_GenericBroadcast(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		_ = websocket.JSON.Receive(ws, &received)
+		_ = coderWSJson.Read(ctx, ws, &received)
 	}()
 
-	// Use Go 1.27 generic method Broadcast[T]
 	err = h.Broadcast("system_alert", TestAlert{
 		Level:   "critical",
 		Message: "high load detected",
@@ -165,7 +164,6 @@ func TestHandler_GenericStream(t *testing.T) {
 		Count int `json:"count"`
 	}
 
-	// Register generic streaming method with Go 1.27
 	h.RegisterStream("countUp", func(ctx context.Context, req CountReq, stream *Stream[int]) error {
 		for i := 1; i <= req.Count; i++ {
 			if err := stream.Send(i); err != nil {
@@ -175,15 +173,18 @@ func TestHandler_GenericStream(t *testing.T) {
 		return nil
 	})
 
-	server := httptest.NewServer(websocket.Handler(h.WsHandler()))
+	server := httptest.NewServer(h)
 	defer server.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	ws, err := websocket.Dial(wsURL, "", server.URL)
+	ws, _, err := coderWS.Dial(ctx, wsURL, nil)
 	if err != nil {
-		t.Fatalf("websocket.Dial failed: %v", err)
+		t.Fatalf("coderWS.Dial failed: %v", err)
 	}
-	defer ws.Close()
+	defer ws.Close(coderWS.StatusNormalClosure, "")
 
 	reqMsg := map[string]any{
 		"id":     "stream-1",
@@ -192,8 +193,8 @@ func TestHandler_GenericStream(t *testing.T) {
 			CountReq{Count: 3},
 		},
 	}
-	if err := websocket.JSON.Send(ws, reqMsg); err != nil {
-		t.Fatalf("Send failed: %v", err)
+	if err := coderWSJson.Write(ctx, ws, reqMsg); err != nil {
+		t.Fatalf("Write failed: %v", err)
 	}
 
 	var receivedNumbers []int
@@ -211,8 +212,8 @@ func TestHandler_GenericStream(t *testing.T) {
 
 	for !finished {
 		var sMsg StreamMsg
-		if err := websocket.JSON.Receive(ws, &sMsg); err != nil {
-			t.Fatalf("Receive failed: %v", err)
+		if err := coderWSJson.Read(ctx, ws, &sMsg); err != nil {
+			t.Fatalf("Read failed: %v", err)
 		}
 
 		if !sMsg.Stream {
@@ -253,38 +254,37 @@ func TestHandler_StreamCancel(t *testing.T) {
 		}
 	})
 
-	server := httptest.NewServer(websocket.Handler(h.WsHandler()))
+	server := httptest.NewServer(h)
 	defer server.Close()
 
-	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	ws, err := websocket.Dial(wsURL, "", server.URL)
-	if err != nil {
-		t.Fatalf("websocket.Dial failed: %v", err)
-	}
-	defer ws.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// Start stream
-	_ = websocket.JSON.Send(ws, map[string]any{
+	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	ws, _, err := coderWS.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("coderWS.Dial failed: %v", err)
+	}
+	defer ws.Close(coderWS.StatusNormalClosure, "")
+
+	_ = coderWSJson.Write(ctx, ws, map[string]any{
 		"id":     "stream-inf",
 		"method": "infinite",
 		"params": []any{},
 	})
 
-	// Receive 1 tick
 	var tickMsg map[string]any
-	if err := websocket.JSON.Receive(ws, &tickMsg); err != nil {
-		t.Fatalf("Receive tick failed: %v", err)
+	if err := coderWSJson.Read(ctx, ws, &tickMsg); err != nil {
+		t.Fatalf("Read tick failed: %v", err)
 	}
 
-	// Send cancel message
-	_ = websocket.JSON.Send(ws, map[string]any{
+	_ = coderWSJson.Write(ctx, ws, map[string]any{
 		"id":     "stream-inf",
 		"cancel": true,
 	})
 
 	select {
 	case <-cancelledCh:
-		// Successfully cancelled!
 	case <-time.After(1 * time.Second):
 		t.Fatal("Stream was not cancelled in time")
 	}
@@ -306,17 +306,20 @@ func TestHandler_ReflectionChannelStream(t *testing.T) {
 	api := &MockChannelAPI{}
 	h := NewHandler().SetAPIStruct(api)
 
-	server := httptest.NewServer(websocket.Handler(h.WsHandler()))
+	server := httptest.NewServer(h)
 	defer server.Close()
 
-	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	ws, err := websocket.Dial(wsURL, "", server.URL)
-	if err != nil {
-		t.Fatalf("websocket.Dial failed: %v", err)
-	}
-	defer ws.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	_ = websocket.JSON.Send(ws, map[string]any{
+	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	ws, _, err := coderWS.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("coderWS.Dial failed: %v", err)
+	}
+	defer ws.Close(coderWS.StatusNormalClosure, "")
+
+	_ = coderWSJson.Write(ctx, ws, map[string]any{
 		"id":     "chan-1",
 		"method": "StreamStrings",
 		"params": []any{},
@@ -331,8 +334,8 @@ func TestHandler_ReflectionChannelStream(t *testing.T) {
 				Data string `json:"data"`
 			} `json:"result"`
 		}
-		if err := websocket.JSON.Receive(ws, &sMsg); err != nil {
-			t.Fatalf("Receive failed: %v", err)
+		if err := coderWSJson.Read(ctx, ws, &sMsg); err != nil {
+			t.Fatalf("Read failed: %v", err)
 		}
 		if sMsg.Done {
 			break
@@ -347,35 +350,35 @@ func TestHandler_ReflectionChannelStream(t *testing.T) {
 
 func TestHandler_ReflectionFallback(t *testing.T) {
 	api := &MockAPI{}
-	wsFunc := WsHandler(api, func(token string, method string, params []any) bool {
+	server := httptest.NewServer(HttpHandler(api, func(token string, method string, params []any) bool {
 		return token == "secret"
-	})
-
-	server := httptest.NewServer(websocket.Handler(wsFunc))
+	}))
 	defer server.Close()
 
-	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
-	ws, err := websocket.Dial(wsURL, "", server.URL)
-	if err != nil {
-		t.Fatalf("websocket.Dial failed: %v", err)
-	}
-	defer ws.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// Invalid token test
+	wsURL := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	ws, _, err := coderWS.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("coderWS.Dial failed: %v", err)
+	}
+	defer ws.Close(coderWS.StatusNormalClosure, "")
+
 	reqMsg := map[string]any{
 		"id":     "1",
 		"method": "NoArgs",
 		"params": []any{},
 		"token":  "wrong",
 	}
-	_ = websocket.JSON.Send(ws, reqMsg)
+	_ = coderWSJson.Write(ctx, ws, reqMsg)
 
 	var errResp struct {
 		ID    string `json:"id"`
 		Error string `json:"error"`
 	}
-	if err := websocket.JSON.Receive(ws, &errResp); err != nil {
-		t.Fatalf("Receive failed: %v", err)
+	if err := coderWSJson.Read(ctx, ws, &errResp); err != nil {
+		t.Fatalf("Read failed: %v", err)
 	}
 	if errResp.Error != "token not valid" {
 		t.Errorf("expected 'token not valid', got %q", errResp.Error)
@@ -393,7 +396,7 @@ func TestHandler_Compression(t *testing.T) {
 		return req, nil
 	})
 
-	server := httptest.NewServer(h.HttpHandler())
+	server := httptest.NewServer(h)
 	defer server.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -409,14 +412,12 @@ func TestHandler_Compression(t *testing.T) {
 	}
 	defer conn.Close(coderWS.StatusNormalClosure, "")
 
-	// Check permessage-deflate was negotiated
 	extHeader := resp.Header.Get("Sec-WebSocket-Extensions")
 	if !strings.Contains(extHeader, "permessage-deflate") {
 		t.Errorf("expected Sec-WebSocket-Extensions to contain 'permessage-deflate', got %q", extHeader)
 	}
 
-	// Send large payload (> 128 byte threshold)
-	largeText := strings.Repeat("repeated-compressible-text-chunk-", 30) // ~900 bytes
+	largeText := strings.Repeat("repeated-compressible-text-chunk-", 30)
 	sendReq := map[string]any{
 		"id":     "comp-1",
 		"method": "echo",

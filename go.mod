@@ -5,7 +5,6 @@ go 1.27.0
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/json-iterator/go v1.1.12
-	golang.org/x/net v0.52.0
 )
 
 require (

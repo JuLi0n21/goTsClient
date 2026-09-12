@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"reflect"
@@ -13,7 +12,6 @@ import (
 	coderWS "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	jsoniter "github.com/json-iterator/go"
-	netWebsocket "golang.org/x/net/websocket"
 )
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -39,31 +37,12 @@ func (s *Stream[T]) Context() context.Context {
 	return s.ctx
 }
 
-type WSConn interface {
-	SendJSON(v any) error
-}
-
-type netConn struct {
-	ws *netWebsocket.Conn
-	mu sync.Mutex
-}
-
-func (c *netConn) SendJSON(v any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return netWebsocket.Message.Send(c.ws, string(b))
-}
-
-type coderConn struct {
+type wsConn struct {
 	conn *coderWS.Conn
 	mu   sync.Mutex
 }
 
-func (c *coderConn) SendJSON(v any) error {
+func (c *wsConn) SendJSON(v any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return wsjson.Write(context.Background(), c.conn, v)
@@ -116,7 +95,7 @@ type Handler struct {
 	streamRoutesMu       sync.RWMutex
 	streamRoutes         map[string]StreamInvoker
 	connsMu              sync.RWMutex
-	conns                map[WSConn]struct{}
+	conns                map[*wsConn]struct{}
 }
 
 func NewHandler() *Handler {
@@ -125,7 +104,7 @@ func NewHandler() *Handler {
 		compressionThreshold: 512,
 		routes:               make(map[string]RouteInvoker),
 		streamRoutes:         make(map[string]StreamInvoker),
-		conns:                make(map[WSConn]struct{}),
+		conns:                make(map[*wsConn]struct{}),
 	}
 }
 
@@ -236,13 +215,13 @@ func (h *Handler) Broadcast[T any](topic string, data T) error {
 	return firstErr
 }
 
-func (h *Handler) addConn(conn WSConn) {
+func (h *Handler) addConn(conn *wsConn) {
 	h.connsMu.Lock()
 	h.conns[conn] = struct{}{}
 	h.connsMu.Unlock()
 }
 
-func (h *Handler) removeConn(conn WSConn) {
+func (h *Handler) removeConn(conn *wsConn) {
 	h.connsMu.Lock()
 	delete(h.conns, conn)
 	h.connsMu.Unlock()
@@ -267,7 +246,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(coderWS.StatusNormalClosure, "")
 
-	cConn := &coderConn{conn: conn}
+	cConn := &wsConn{conn: conn}
 	h.addConn(cConn)
 	defer h.removeConn(cConn)
 
@@ -289,45 +268,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) WsHandler() func(*netWebsocket.Conn) {
-	return h.ServeWS
-}
-
-func (h *Handler) ServeWS(ws *netWebsocket.Conn) {
-	sConn := &netConn{ws: ws}
-	h.addConn(sConn)
-	defer h.removeConn(sConn)
-
-	streams := &streamTracker{cancels: make(map[string]context.CancelFunc)}
-	defer streams.cancelAll()
-
-	var apiVal reflect.Value
-	if h.apiStruct != nil {
-		apiVal = reflect.ValueOf(h.apiStruct)
-	}
-
-	for {
-		var msg []byte
-		if err := netWebsocket.Message.Receive(ws, &msg); err != nil {
-			break
-		}
-
-		var req wsRPCRequest
-		if err := json.NewDecoder(bytes.NewReader(msg)).Decode(&req); err != nil {
-			if err == io.EOF {
-				continue
-			}
-			_ = sConn.SendJSON(map[string]any{"id": "", "error": "invalid json payload"})
-			continue
-		}
-
-		h.handleRequest(context.Background(), sConn, req, streams, apiVal)
-	}
-}
-
 func (h *Handler) handleRequest(
 	baseCtx context.Context,
-	conn WSConn,
+	conn *wsConn,
 	req wsRPCRequest,
 	streams *streamTracker,
 	apiVal reflect.Value,
@@ -601,7 +544,6 @@ func (h *Handler) handleRequest(
 	})
 }
 
-func WsHandler(apiStruct any, isTokenValid func(token string, method string, params []any) bool) func(*netWebsocket.Conn) {
-	h := NewHandler().SetAPIStruct(apiStruct).SetTokenValidator(isTokenValid)
-	return h.WsHandler()
+func HttpHandler(apiStruct any, isTokenValid func(token string, method string, params []any) bool) http.Handler {
+	return NewHandler().SetAPIStruct(apiStruct).SetTokenValidator(isTokenValid)
 }
