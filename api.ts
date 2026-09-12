@@ -82,7 +82,7 @@ class StreamingJSONDecoder {
 
 export class WSBackend {
 	private ws: WebSocket | null = null;
-	private tokenProvider?: () => string;
+	private tokenProvider?: () => string | Promise<string>;
 	private url: string;
 	private decoder = new StreamingJSONDecoder();
 	private callbacks: Record<string, {
@@ -111,7 +111,7 @@ export class WSBackend {
 		this.connect();
 	}
 
-	public setTokenProvider(fn: () => string) {
+	public setTokenProvider(fn: () => string | Promise<string>) {
 		this.tokenProvider = fn;
 	}
 
@@ -363,10 +363,14 @@ export class WSBackend {
 		return result;
 	}
 
-	private _send(id: string, method: string, params: any[]) {
+	private async _send(id: string, method: string, params: any[]) {
 		if (!this.ws) throw new Error("WebSocket not initialized");
 		const msg: any = { id, method, params };
-		if (this.tokenProvider) msg.token = this.tokenProvider();
+		if (this.tokenProvider) msg.token = await this.tokenProvider();
+		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+			this.queue.push({ id, method, params, resolve: () => { }, reject: () => { } });
+			return;
+		}
 		this.ws.send(JSON.stringify(msg));
 	}
 }
