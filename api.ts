@@ -255,9 +255,10 @@ export class WSBackend {
 		});
 
 		const result: any = promise;
+		const self = this;
 		result[Symbol.asyncIterator] = () => {
 			return {
-				next(): Promise<IteratorResult<any>> {
+				next: (): Promise<IteratorResult<any>> => {
 					if (streamQueue.length > 0) {
 						const item = streamQueue.shift()!;
 						if (item.error) {
@@ -273,15 +274,15 @@ export class WSBackend {
 						rejectWaiting = rej;
 					});
 				},
-				return(): Promise<IteratorResult<any>> {
+				return: (): Promise<IteratorResult<any>> => {
 					isStreamDone = true;
-					if (this.callbacks[id]) {
-						clearTimeout(this.callbacks[id].timeout);
-						delete this.callbacks[id];
+					if (self.callbacks[id]) {
+						clearTimeout(self.callbacks[id].timeout);
+						delete self.callbacks[id];
 					}
-					delete this.streamCallbacks[id];
-					if (this._connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
-						this.ws.send(JSON.stringify({ id, cancel: true }));
+					delete self.streamCallbacks[id];
+					if (self._connected && self.ws && self.ws.readyState === WebSocket.OPEN) {
+						self.ws.send(JSON.stringify({ id, cancel: true }));
 					}
 					return Promise.resolve({ value: undefined, done: true });
 				}
