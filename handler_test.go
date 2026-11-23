@@ -30,14 +30,14 @@ type TestAlert struct {
 func TestHandler_GenericRegister(t *testing.T) {
 	h := NewHandler()
 
-	h.Register("greet", func(ctx context.Context, req TestReq) (TestResp, error) {
+	Register(h, "greet", func(ctx context.Context, req TestReq) (TestResp, error) {
 		return TestResp{
 			Greeting: "Hello " + req.Name,
 			IsAdult:  req.Age >= 18,
 		}, nil
 	})
 
-	h.RegisterNoArg("status", func(ctx context.Context) (string, error) {
+	RegisterNoArg(h, "status", func(ctx context.Context) (string, error) {
 		return "ok", nil
 	})
 
@@ -139,7 +139,7 @@ func TestHandler_GenericBroadcast(t *testing.T) {
 		_ = coderWSJson.Read(ctx, ws, &received)
 	}()
 
-	err = h.Broadcast("system_alert", TestAlert{
+	err = Broadcast(h, "system_alert", TestAlert{
 		Level:   "critical",
 		Message: "high load detected",
 	})
@@ -164,7 +164,7 @@ func TestHandler_GenericStream(t *testing.T) {
 		Count int `json:"count"`
 	}
 
-	h.RegisterStream("countUp", func(ctx context.Context, req CountReq, stream *Stream[int]) error {
+	RegisterStream(h, "countUp", func(ctx context.Context, req CountReq, stream *Stream[int]) error {
 		for i := 1; i <= req.Count; i++ {
 			if err := stream.Send(i); err != nil {
 				return err
@@ -237,7 +237,7 @@ func TestHandler_StreamCancel(t *testing.T) {
 
 	cancelledCh := make(chan struct{})
 
-	h.RegisterStreamNoArg("infinite", func(ctx context.Context, stream *Stream[string]) error {
+	RegisterStreamNoArg(h, "infinite", func(ctx context.Context, stream *Stream[string]) error {
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -350,7 +350,7 @@ func TestHandler_ReflectionChannelStream(t *testing.T) {
 
 func TestHandler_ReflectionFallback(t *testing.T) {
 	api := &MockAPI{}
-	server := httptest.NewServer(HttpHandler(api, func(token string, method string, params []any) bool {
+	server := httptest.NewServer(HttpHandler(api, func(ctx context.Context, token string, method string, params []any) bool {
 		return token == "secret"
 	}))
 	defer server.Close()
@@ -392,7 +392,7 @@ func TestHandler_Compression(t *testing.T) {
 		Payload string `json:"payload"`
 	}
 
-	h.Register("echo", func(ctx context.Context, req EchoReq) (EchoReq, error) {
+	Register(h, "echo", func(ctx context.Context, req EchoReq) (EchoReq, error) {
 		return req, nil
 	})
 
@@ -455,7 +455,7 @@ func TestHandler_LargePayload(t *testing.T) {
 		ImageBase64 string `json:"image_base64"`
 	}
 
-	h.Register("upload", func(ctx context.Context, req LargeReq) (int, error) {
+	Register(h, "upload", func(ctx context.Context, req LargeReq) (int, error) {
 		return len(req.ImageBase64), nil
 	})
 
@@ -499,4 +499,3 @@ func TestHandler_LargePayload(t *testing.T) {
 		t.Errorf("expected length %d, got %d", len(hugeString), resp.Result.Data)
 	}
 }
-

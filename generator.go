@@ -13,22 +13,22 @@ import (
 //go:embed api.ts
 var backendClient string
 
-var errorType = reflect.TypeOf((*error)(nil)).Elem()
+var errorType = reflect.TypeFor[error]()
 
 func typeOf[T any]() reflect.Type {
-	t := reflect.TypeOf((*T)(nil)).Elem()
-	if t.Kind() != reflect.Ptr && t.Kind() != reflect.Interface {
+	t := reflect.TypeFor[T]()
+	if t.Kind() != reflect.Pointer && t.Kind() != reflect.Interface {
 		t = reflect.PointerTo(t)
 	}
 	return t
 }
 
 func broadcastTypeOf[T any]() reflect.Type {
-	t := reflect.TypeOf((*T)(nil)).Elem()
+	t := reflect.TypeFor[T]()
 	if t.Kind() == reflect.Interface {
 		return nil
 	}
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() == reflect.Struct && t.NumField() == 0 {
@@ -69,7 +69,7 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 
 	if broadcastType != nil {
 		bt := broadcastType
-		if bt.Kind() == reflect.Ptr {
+		if bt.Kind() == reflect.Pointer {
 			bt = bt.Elem()
 		}
 
@@ -141,7 +141,7 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 
 			optional := ""
 			ft := f.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				optional = "?"
 				ft = ft.Elem()
 			}
@@ -222,7 +222,7 @@ func collectStructs(t reflect.Type, m map[string]reflect.Type) {
 	if t == nil {
 		return
 	}
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {
@@ -253,7 +253,7 @@ func goTypeToTS(t reflect.Type) string {
 	if t == nil {
 		return "any"
 	}
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		return goTypeToTS(t.Elem())
 	}
 	switch t.Kind() {

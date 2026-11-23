@@ -26,7 +26,7 @@ func (s *BenchService) ProcessData(ctx context.Context, d BenchData) (BenchData,
 // Benchmark 1: Go 1.27 Generic Method Dispatch vs Dynamic Reflection Dispatch
 func BenchmarkDispatch_Generic(b *testing.B) {
 	h := NewHandler()
-	h.Register("process", func(ctx context.Context, req BenchData) (BenchData, error) {
+	Register(h, "process", func(ctx context.Context, req BenchData) (BenchData, error) {
 		req.Score += 1.0
 		return req, nil
 	})
@@ -58,7 +58,7 @@ func BenchmarkDispatch_Reflection(b *testing.B) {
 	val := reflect.ValueOf(svc)
 	method := val.MethodByName("ProcessData")
 	mType := method.Type()
-	ctxType := reflect.TypeOf((*context.Context)(nil)).Elem()
+	ctxType := reflect.TypeFor[context.Context]()
 
 	rawParams := []any{
 		map[string]any{
@@ -184,7 +184,7 @@ func BenchmarkJSON_Encoder_Jsoniter(b *testing.B) {
 func BenchmarkDataDelivery_Streaming(b *testing.B) {
 	ctx := context.Background()
 	items := make([]BenchData, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		items[i] = BenchData{
 			ID:       i,
 			Username: "user",
@@ -213,7 +213,7 @@ func BenchmarkDataDelivery_Streaming(b *testing.B) {
 
 func BenchmarkDataDelivery_Batch(b *testing.B) {
 	items := make([]BenchData, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		items[i] = BenchData{
 			ID:       i,
 			Username: "user",

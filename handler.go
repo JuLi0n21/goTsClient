@@ -145,7 +145,7 @@ func decodeParam(raw any, target any) error {
 	return json.NewDecoder(bytes.NewReader(b)).Decode(target)
 }
 
-func (h *Handler) Register[Req, Resp any](name string, fn func(ctx context.Context, req Req) (Resp, error)) *Handler {
+func Register[Req, Resp any](h *Handler, name string, fn func(ctx context.Context, req Req) (Resp, error)) *Handler {
 	h.routesMu.Lock()
 	defer h.routesMu.Unlock()
 	h.routes[name] = func(ctx context.Context, rawParams []any) (any, error) {
@@ -161,7 +161,7 @@ func (h *Handler) Register[Req, Resp any](name string, fn func(ctx context.Conte
 	return h
 }
 
-func (h *Handler) RegisterNoArg[Resp any](name string, fn func(ctx context.Context) (Resp, error)) *Handler {
+func RegisterNoArg[Resp any](h *Handler, name string, fn func(ctx context.Context) (Resp, error)) *Handler {
 	h.routesMu.Lock()
 	defer h.routesMu.Unlock()
 	h.routes[name] = func(ctx context.Context, rawParams []any) (any, error) {
@@ -173,7 +173,7 @@ func (h *Handler) RegisterNoArg[Resp any](name string, fn func(ctx context.Conte
 	return h
 }
 
-func (h *Handler) RegisterStream[Req, Item any](name string, fn func(ctx context.Context, req Req, stream *Stream[Item]) error) *Handler {
+func RegisterStream[Req, Item any](h *Handler, name string, fn func(ctx context.Context, req Req, stream *Stream[Item]) error) *Handler {
 	h.streamRoutesMu.Lock()
 	defer h.streamRoutesMu.Unlock()
 	h.streamRoutes[name] = func(ctx context.Context, rawParams []any, sendChunk func(data any) error) error {
@@ -194,7 +194,7 @@ func (h *Handler) RegisterStream[Req, Item any](name string, fn func(ctx context
 	return h
 }
 
-func (h *Handler) RegisterStreamNoArg[Item any](name string, fn func(ctx context.Context, stream *Stream[Item]) error) *Handler {
+func RegisterStreamNoArg[Item any](h *Handler, name string, fn func(ctx context.Context, stream *Stream[Item]) error) *Handler {
 	h.streamRoutesMu.Lock()
 	defer h.streamRoutesMu.Unlock()
 	h.streamRoutes[name] = func(ctx context.Context, rawParams []any, sendChunk func(data any) error) error {
@@ -211,7 +211,7 @@ func (h *Handler) RegisterStreamNoArg[Item any](name string, fn func(ctx context
 	return h
 }
 
-func (h *Handler) Broadcast[T any](topic string, data T) error {
+func Broadcast[T any](h *Handler, topic string, data T) error {
 	msg := map[string]any{
 		"topic": topic,
 		"data":  data,
@@ -427,7 +427,7 @@ func (h *Handler) handleRequest(
 	hasCtx := false
 	startIdx := 0
 
-	if numIn > 0 && mType.In(0).Implements(reflect.TypeOf((*context.Context)(nil)).Elem()) {
+	if numIn > 0 && mType.In(0).Implements(reflect.TypeFor[context.Context]()) {
 		hasCtx = true
 		startIdx = 1
 	}

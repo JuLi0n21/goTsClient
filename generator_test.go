@@ -70,7 +70,7 @@ func TestCollectStructs(t *testing.T) {
 	structs := make(map[string]reflect.Type)
 
 	// Test nested collection
-	collectStructs(reflect.TypeOf(Order{}), structs)
+	collectStructs(reflect.TypeFor[Order](), structs)
 
 	if _, ok := structs["Order"]; !ok {
 		t.Error("Expected Order in map")
