@@ -12,12 +12,18 @@ import (
 	coderWS "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	jsoniter "github.com/json-iterator/go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
-var json = jsoniter.ConfigCompatibleWithStandardLibrary
+var (
+	json      = jsoniter.ConfigCompatibleWithStandardLibrary
+	rpcTracer = otel.Tracer("juli0n21/rpc")
+)
 
 type RouteInvoker func(ctx context.Context, rawParams []any) (any, error)
 type StreamInvoker func(ctx context.Context, rawParams []any, sendChunk func(data any) error) error
+type TokenValidatorFunc func(ctx context.Context, token string, method string, params []any) bool
 
 type Stream[T any] struct {
 	ctx  context.Context
@@ -87,7 +93,7 @@ func (s *streamTracker) cancelAll() {
 
 type Handler struct {
 	apiStruct            any
-	isTokenValid         func(token string, method string, params []any) bool
+	isTokenValid         TokenValidatorFunc
 	compressionEnabled   bool
 	compressionThreshold int
 	readLimit            int64
@@ -121,7 +127,7 @@ func (h *Handler) SetCompression(enabled bool, threshold int) *Handler {
 	return h
 }
 
-func (h *Handler) SetTokenValidator(fn func(token string, method string, params []any) bool) *Handler {
+func (h *Handler) SetTokenValidator(fn TokenValidatorFunc) *Handler {
 	h.isTokenValid = fn
 	return h
 }
@@ -291,7 +297,19 @@ func (h *Handler) handleRequest(
 		return
 	}
 
-	if h.isTokenValid != nil && !h.isTokenValid(req.Token, req.Method, req.Params) {
+	spanCtx, span := rpcTracer.Start(baseCtx, req.Method)
+	span.SetAttributes(
+		attribute.String("rpc.method", req.Method),
+		attribute.String("rpc.request.id", req.ID),
+	)
+	asyncSpan := false
+	defer func() {
+		if !asyncSpan {
+			span.End()
+		}
+	}()
+
+	if h.isTokenValid != nil && !h.isTokenValid(spanCtx, req.Token, req.Method, req.Params) {
 		_ = conn.SendJSON(map[string]any{
 			"id":    req.ID,
 			"error": "token not valid",
@@ -304,11 +322,13 @@ func (h *Handler) handleRequest(
 	h.streamRoutesMu.RUnlock()
 
 	if isStream {
-		streamCtx, streamCancel := context.WithCancel(baseCtx)
+		asyncSpan = true
+		streamCtx, streamCancel := context.WithCancel(spanCtx)
 		streams.add(req.ID, streamCancel)
 
 		go func() {
 			defer streams.cancel(req.ID)
+			defer span.End()
 
 			sendChunk := func(data any) error {
 				return conn.SendJSON(map[string]any{
@@ -364,7 +384,7 @@ func (h *Handler) handleRequest(
 					errVal = fmt.Sprintf("method panic: %v", r)
 				}
 			}()
-			res, err := invoker(context.Background(), req.Params)
+			res, err := invoker(spanCtx, req.Params)
 			if err != nil {
 				errVal = err.Error()
 			}
@@ -426,7 +446,7 @@ func (h *Handler) handleRequest(
 
 	var in []reflect.Value
 	if hasCtx {
-		in = append(in, reflect.ValueOf(context.Background()))
+		in = append(in, reflect.ValueOf(spanCtx))
 	}
 
 	for i := startIdx; i < numIn; i++ {
@@ -486,7 +506,8 @@ func (h *Handler) handleRequest(
 			return
 		}
 
-		streamCtx, streamCancel := context.WithCancel(baseCtx)
+		asyncSpan = true
+		streamCtx, streamCancel := context.WithCancel(spanCtx)
 		streams.add(req.ID, streamCancel)
 
 		go func() {
@@ -555,6 +576,6 @@ func (h *Handler) handleRequest(
 	})
 }
 
-func HttpHandler(apiStruct any, isTokenValid func(token string, method string, params []any) bool) http.Handler {
+func HttpHandler(apiStruct any, isTokenValid TokenValidatorFunc) http.Handler {
 	return NewHandler().SetAPIStruct(apiStruct).SetTokenValidator(isTokenValid)
 }

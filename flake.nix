@@ -13,6 +13,7 @@
       devShells.x86_64-linux.default = pkgs.mkShell {
         packages = with pkgs; [
           go_1_27
+          gopls
           nodejs_24
         ];
       };
