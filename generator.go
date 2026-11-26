@@ -81,7 +81,8 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 					topicName = strings.Split(tag, ",")[0]
 				}
 				collectStructs(f.Type, structs)
-				b.WriteString(fmt.Sprintf("  '%s': %s;\n", topicName, goTypeToTS(f.Type)))
+				fmt.Fprintf(&b, "  '%s': %s;\n", topicName, goTypeToTS(f.Type))
+
 			}
 		}
 	}
@@ -128,7 +129,7 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 
 	for _, name := range names {
 		st := structs[name]
-		b.WriteString(fmt.Sprintf("export interface %s {\n", name))
+		fmt.Fprintf(&b, "export interface %s {\n", name)
 		for f := range st.Fields() {
 			jsName := f.Name
 			tag := f.Tag.Get("json")
@@ -145,14 +146,15 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 				optional = "?"
 				ft = ft.Elem()
 			}
-			b.WriteString(fmt.Sprintf("  %s%s: %s;\n", jsName, optional, goTypeToTS(ft)))
+			fmt.Fprintf(&b, "  %s%s: %s;\n", jsName, optional, goTypeToTS(ft))
 		}
 		b.WriteString("}\n\n")
 	}
 
 	b.WriteString("export type RPCResult<T> = { data: T; error?: any };\n\n")
+	b.WriteString("export type EntityRef = { type: string; id: string };\n\n")
 
-	b.WriteString(fmt.Sprintf("export interface %s {\n", clientName))
+	fmt.Fprintf(&b, "export interface %s {\n", clientName)
 	for m := range apiType.Methods() {
 		params := []string{}
 
@@ -179,10 +181,11 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 			params = append(params, fmt.Sprintf("%s: %s", pname, ptype))
 			tsParamIdx++
 		}
+		params = append(params, "refs?: EntityRef[]")
 
 		if m.Type.NumOut() > 0 && m.Type.Out(0).Kind() == reflect.Chan {
 			resType := goTypeToTS(m.Type.Out(0).Elem())
-			b.WriteString(fmt.Sprintf("  %s(%s): Promise<RPCResult<%s>> & AsyncIterable<%s>;\n", m.Name, strings.Join(params, ", "), resType, resType))
+			fmt.Fprintf(&b, "  %s(%s): Promise<RPCResult<%s>> & AsyncIterable<%s>;\n", m.Name, strings.Join(params, ", "), resType, resType)
 			continue
 		}
 
@@ -194,15 +197,15 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 			}
 		}
 
-		b.WriteString(fmt.Sprintf("  %s(%s): Promise<RPCResult<%s>>;\n", m.Name, strings.Join(params, ", "), resType))
+		fmt.Fprintf(&b, "  %s(%s): Promise<RPCResult<%s>>;\n", m.Name, strings.Join(params, ", "), resType)
 	}
 	b.WriteString("}\n\n")
 
 	b.WriteString(backendClient)
 
 	b.WriteString("\nlet backendWrapper: WSBackend | null = null;\n")
-	b.WriteString(fmt.Sprintf("let backendInstance: %s | null = null;\n\n", clientName))
-	b.WriteString(fmt.Sprintf("export function useBackend(url: string = '/ws'): { api: %s, backend: WSBackend } {\n", clientName))
+	fmt.Fprintf(&b, "let backendInstance: %s | null = null;\n\n", clientName)
+	fmt.Fprintf(&b, "export function useBackend(url: string = '/ws'): { api: %s, backend: WSBackend } {\n", clientName)
 	b.WriteString("  if (url.startsWith('/')) {\n")
 	b.WriteString("    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';\n")
 	b.WriteString("    const host = window.location.host;\n")
@@ -210,7 +213,7 @@ func GenerateTS(apiType reflect.Type, broadcastType reflect.Type, clientName str
 	b.WriteString("  }\n\n")
 	b.WriteString("  if (!backendWrapper) {\n")
 	b.WriteString("    backendWrapper = new WSBackend(url);\n")
-	b.WriteString("    backendInstance = backendWrapper.api as unknown as " + clientName + ";\n")
+	fmt.Fprintf(&b, "    backendInstance = backendWrapper.api as unknown as %s;\n", clientName)
 	b.WriteString("  }\n")
 	b.WriteString("  return { api: backendInstance!, backend: backendWrapper! };\n")
 	b.WriteString("}\n")

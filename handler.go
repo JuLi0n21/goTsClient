@@ -54,12 +54,18 @@ func (c *wsConn) SendJSON(v any) error {
 	return wsjson.Write(context.Background(), c.conn, v)
 }
 
+type EntityRefs struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
 type wsRPCRequest struct {
-	ID     string `json:"id"`
-	Method string `json:"method"`
-	Params []any  `json:"params"`
-	Token  string `json:"token"`
-	Cancel bool   `json:"cancel"`
+	ID     string       `json:"id"`
+	Method string       `json:"method"`
+	Params []any        `json:"params"`
+	Token  string       `json:"token"`
+	Cancel bool         `json:"cancel"`
+	Refs   []EntityRefs `json:"refs,omitempty"`
 }
 
 type streamTracker struct {
@@ -302,6 +308,13 @@ func (h *Handler) handleRequest(
 		attribute.String("rpc.method", req.Method),
 		attribute.String("rpc.request.id", req.ID),
 	)
+
+	attrs := make([]attribute.KeyValue, len(req.Refs))
+	for i, ref := range req.Refs {
+		attrs[i] = attribute.String(ref.Type, ref.ID)
+	}
+	span.SetAttributes(attrs...)
+
 	asyncSpan := false
 	defer func() {
 		if !asyncSpan {

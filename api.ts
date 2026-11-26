@@ -294,12 +294,32 @@ export class WSBackend {
 
 	private async _send(id: string, method: string, params: any[]) {
 		if (!this.ws) throw new Error("WebSocket not initialized");
-		const msg: any = { id, method, params };
+
+		let { cleanParams, refs } = this.extractRefs(params);
+		const msg: any = { id, method, params: cleanParams };
+		if (refs) msg.refs = refs;
 		if (this.tokenProvider) msg.token = await this.tokenProvider();
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			this.queue.push({ id, method, params, resolve: () => { }, reject: () => { } });
 			return;
 		}
 		this.ws.send(JSON.stringify(msg));
+	}
+
+	private extractRefs(params: any[]): { cleanParams: any[]; refs?: Array<{ type: string; id: string }> } {
+		if (params.length === 0) {
+			return { cleanParams: params };
+		}
+		const last = params[params.length - 1];
+		const isRefArray = Array.isArray(last) && last.every(
+			(item) => item && typeof item === "object" && typeof item.type === "string" && typeof item.id === "string"
+		);
+		if (!isRefArray) {
+			return { cleanParams: params };
+		}
+		return {
+			cleanParams: params.slice(0, -1),
+			refs: last,
+		};
 	}
 }
